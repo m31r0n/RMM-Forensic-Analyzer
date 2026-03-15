@@ -30,8 +30,8 @@ def generate_csvs(
 
     # ── 1. conexiones.csv ────────────────────────────────────────────────
     with open(f"{outdir}/conexiones.csv", "w", newline="", encoding="utf-8-sig") as f:
-        fields = ["#", "rmm_type", "hostname", "direccion", "datetime",
-                  "usuario", "remote_id", "alias"]
+        fields = ["#", "rmm_type", "hostname", "cuenta_local", "direccion",
+                  "datetime", "usuario", "remote_id", "alias"]
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         for i, conn in enumerate(connections, 1):
@@ -42,6 +42,7 @@ def generate_csvs(
                 "#": i,
                 "rmm_type": conn.rmm_type.value,
                 "hostname": conn.hostname,
+                "cuenta_local": conn.extras.get("user_account", ""),
                 "direccion": dir_val,
                 "datetime": fmt_dt(conn.datetime) or conn.dt_str,
                 "usuario": conn.user,
@@ -51,10 +52,11 @@ def generate_csvs(
 
     # ── 2. sesiones.csv ──────────────────────────────────────────────────
     with open(f"{outdir}/sesiones.csv", "w", newline="", encoding="utf-8-sig") as f:
-        fields = ["#", "rmm_type", "hostname", "remote_id", "alias",
-                  "inicio", "fin", "duracion", "file_transfers", "clipboard",
-                  "text_transfers", "elevacion", "ips", "riesgo", "score",
-                  "razones", "proximidad_incidente", "clasificacion_pais"]
+        fields = ["#", "rmm_type", "hostname", "cuenta_local", "remote_id",
+                  "alias", "inicio", "fin", "duracion", "file_transfers",
+                  "clipboard", "text_transfers", "elevacion", "ips",
+                  "riesgo", "score", "razones", "proximidad_incidente",
+                  "clasificacion_pais"]
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         for i, s in enumerate(sessions, 1):
@@ -62,6 +64,7 @@ def generate_csvs(
                 "#": i,
                 "rmm_type": s.rmm_type.value,
                 "hostname": s.hostname,
+                "cuenta_local": s.extras.get("user_account", ""),
                 "remote_id": s.remote_id,
                 "alias": s.alias,
                 "inicio": fmt_dt(s.start_dt),

@@ -187,8 +187,8 @@ def generate_html(
 
     # ── Extra session table columns ──────────────────────────────
     sess_th_winlogon = '<th>Winlogon</th>' if has_anydesk else ''
-    sess_th_host = '<th>Host</th>' if multi_host else ''
-    conn_th_host = '<th>Host</th>' if multi_host else ''
+    sess_th_host = '<th>Host</th><th>Cuenta</th>' if multi_host else ''
+    conn_th_host = '<th>Host</th><th>Cuenta</th>' if multi_host else ''
 
     # ── HTML FINAL ───────────────────────────────────────────────
     SEC = ('style="background:white;border:1px solid #d4e8e8;border-radius:10px;'
@@ -694,11 +694,13 @@ def _build_conn_rows(connections: list[RMMConnection], multi_host: bool) -> str:
         d_txt = f"&#11015; {r.direction.value}" if is_in else f"&#11014; {r.direction.value}"
         alias = f'<br><code style="font-size:.75em;color:#7a9b9b">{r.alias}</code>' if r.alias else ""
         host_td = f'<td>{r.hostname or "\u2014"}</td>' if multi_host else ""
+        user_acct = r.extras.get("user_account", "")
+        user_td = f'<td style="font-size:.82em">{user_acct}</td>' if multi_host else ""
         rows += (
             f'<tr>'
             f'<td style="color:#7a9b9b;font-size:.8rem">{i}</td>'
             f'<td>{rmm_badge(r.rmm_type.value)}</td>'
-            f'{host_td}'
+            f'{host_td}{user_td}'
             f'<td><span style="padding:.15rem .6rem;border-radius:4px;font-size:.78rem;font-weight:600;{d_css}">{d_txt}</span></td>'
             f'<td style="font-family:IBM Plex Mono,monospace;font-size:.82em">{fmt_dt(r.datetime) or r.dt_str}</td>'
             f'<td>{r.user}</td>'
@@ -731,6 +733,8 @@ def _build_session_rows(
         )
 
         host_td = f'<td>{s.hostname or "\u2014"}</td>' if multi_host else ""
+        user_acct = s.extras.get("user_account", "")
+        user_td = f'<td style="font-size:.82em">{user_acct}</td>' if multi_host else ""
 
         # Winlogon column (AnyDesk only)
         wl_td = ""
@@ -742,7 +746,7 @@ def _build_session_rows(
             f'<tr style="{border}">'
             f'<td style="color:#7a9b9b">{s.idx}</td>'
             f'<td>{rmm_badge(s.rmm_type.value)}</td>'
-            f'{host_td}'
+            f'{host_td}{user_td}'
             f'<td><code style="font-size:.85em">{s.remote_id}</code>'
             f'<br><small style="color:#7a9b9b">{s.alias}</small></td>'
             f'<td style="font-size:.8em;font-family:IBM Plex Mono,monospace">{fmt_dt(s.start_dt)}</td>'

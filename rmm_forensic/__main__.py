@@ -167,10 +167,14 @@ def _discover_and_parse(
         # Print discovery summary
         cprint(f"\n  Archivos descubiertos: {len(discovered)}", Fore.CYAN)
         for d in discovered:
+            extra = ""
+            if d.hostname:
+                extra += f"  host: {d.hostname}"
+            if d.user_account:
+                extra += f"  user: {d.user_account}"
             cprint(
                 f"    [{d.rmm_type}] {d.filename} "
-                f"(confianza: {d.confidence})"
-                + (f"  host: {d.hostname}" if d.hostname else ""),
+                f"(confianza: {d.confidence}){extra}",
             )
         print()
 
@@ -214,7 +218,11 @@ def _parse_single_file(
     results_by_rmm: dict[str, ParseResult],
     hostname_filter: str,
 ) -> None:
-    """Parse a single discovered file and merge into *results_by_rmm*."""
+    """Parse a single discovered file and merge into *results_by_rmm*.
+
+    Uses a composite key ``RMM:hostname:user`` so logs from different
+    users/hosts produce separate ParseResult groups.
+    """
     parser = ParserRegistry.get_for_file(d.filepath)
     if not parser:
         cprint(f"    [!] Sin parser para: {d.filename}", Fore.YELLOW)
@@ -227,7 +235,23 @@ def _parse_single_file(
         cprint(f"    [ERROR] {d.filename}: {exc}", Fore.RED)
         return
 
+    # Stamp user_account on every session and connection from this file.
+    user_account = d.user_account or ""
+    if user_account:
+        for s in result.sessions:
+            if not s.extras.get("user_account"):
+                s.extras["user_account"] = user_account
+        for c in result.connections:
+            if not c.extras.get("user_account"):
+                c.extras["user_account"] = user_account
+
+    # Build composite key: RMM:host:user  (separates per-user results).
     key = result.rmm_type.value
+    if hostname:
+        key += f":{hostname}"
+    if user_account:
+        key += f":{user_account}"
+
     if key in results_by_rmm:
         results_by_rmm[key].merge(result)
     else:
@@ -297,12 +321,31 @@ def _run_analysis(
             hostname_filter=hostname_filter,
         )
 
-        for pr in parse_results:
+        for idx, pr in enumerate(parse_results):
             score_all(pr.sessions)
+            # Use the RMM type as base key; append index if there are
+            # multiple ParseResults for the same RMM (different users).
             rmm_name = pr.rmm_type.value
-            results[rmm_name] = pr
+            key = rmm_name
+            if key in results:
+                key = f"{rmm_name}_{idx}"
+            results[key] = pr
+            # Build display label with host/user info.
+            label = rmm_name
+            if pr.hostname:
+                label += f" ({pr.hostname})"
+            # Check if sessions carry user_account info.
+            user_accounts = {
+                s.extras.get("user_account", "")
+                for s in pr.sessions if s.extras.get("user_account")
+            } | {
+                c.extras.get("user_account", "")
+                for c in pr.connections if c.extras.get("user_account")
+            }
+            if user_accounts:
+                label += f" [{', '.join(sorted(user_accounts))}]"
             cprint(
-                f"    {rmm_name}: {len(pr.sessions)} sesiones, "
+                f"    {label}: {len(pr.sessions)} sesiones, "
                 f"{len(pr.connections)} conexiones",
                 Fore.GREEN,
             )

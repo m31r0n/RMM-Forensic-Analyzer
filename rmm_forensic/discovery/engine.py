@@ -22,6 +22,21 @@ from .signatures import identify_rmm
 logger = logging.getLogger(__name__)
 
 
+# Directories that never contain useful RMM logs and should be skipped.
+_SKIP_DIRS: set[str] = {
+    "$recycle.bin",
+    "system volume information",
+    "$winreagent",
+    "$windows.~bt",
+    "$windows.~ws",
+    "windows.old",
+    "config.msi",
+    "__pycache__",
+    ".git",
+    "node_modules",
+}
+
+
 # ── Discovered file model ────────────────────────────────────────────────────
 
 @dataclass
@@ -32,6 +47,7 @@ class DiscoveredFile:
     rmm_type: str           # RMM name (matches RMMType.value)
     filename: str
     hostname: str = ""      # Inferred hostname (from KAPE structure, etc.)
+    user_account: str = ""  # Windows user from path (Users/<user>/…)
     confidence: str = ""    # "high" (filename match), "medium" (content), "low" (path)
     size_bytes: int = 0
 
@@ -94,7 +110,7 @@ class LogDiscoveryEngine:
         else:
             logger.warning("Input path does not exist: %s", input_path)
 
-        results.sort(key=lambda d: (d.rmm_type, d.filepath))
+        results.sort(key=lambda d: (d.rmm_type, d.hostname, d.user_account, d.filepath))
         return results
 
     def summary(self, discovered: list[DiscoveredFile]) -> str:
@@ -120,9 +136,10 @@ class LogDiscoveryEngine:
             for f in files:
                 conf = f"[{f.confidence}]" if f.confidence else ""
                 host = f" (host: {f.hostname})" if f.hostname else ""
+                user = f" (user: {f.user_account})" if f.user_account else ""
                 lines.append(
                     f"    - {f.filename} ({_human_size(f.size_bytes)}) "
-                    f"{conf}{host}"
+                    f"{conf}{host}{user}"
                 )
             lines.append("")
 
@@ -175,9 +192,13 @@ class LogDiscoveryEngine:
         for entry in entries:
             try:
                 if entry.is_dir(follow_symlinks=False):
+                    # Skip Windows system directories and other junk.
+                    if entry.name.lower() in _SKIP_DIRS:
+                        logger.debug("Skipping system directory: %s", entry.path)
+                        continue
                     dirs.append(entry.path)
                 elif entry.is_file(follow_symlinks=False):
-                    # If the file is an archive, extract and recurse.
+                    # If the file is a valid archive, extract and recurse.
                     if self._archive_handler.is_archive(entry.path):
                         try:
                             tmp_dir = self._archive_handler.extract(entry.path)
@@ -260,7 +281,7 @@ class LogDiscoveryEngine:
                     else:
                         exact_matches.append(rmm_name)
 
-        hostname = self._infer_hostname(filepath)
+        hostname, user_account = _infer_host_and_user(filepath)
 
         # Unique exact match -> high confidence.
         if len(exact_matches) == 1:
@@ -269,6 +290,7 @@ class LogDiscoveryEngine:
                 rmm_type=exact_matches[0],
                 filename=filename,
                 hostname=hostname,
+                user_account=user_account,
                 confidence="high",
                 size_bytes=size_bytes,
             )
@@ -284,6 +306,7 @@ class LogDiscoveryEngine:
                     rmm_type=identified,
                     filename=filename,
                     hostname=hostname,
+                    user_account=user_account,
                     confidence=conf,
                     size_bytes=size_bytes,
                 )
@@ -311,44 +334,74 @@ class LogDiscoveryEngine:
                             rmm_type=rmm_name,
                             filename=filename,
                             hostname=hostname,
+                            user_account=user_account,
                             confidence="low",
                             size_bytes=size_bytes,
                         )
 
         return None
 
-    def _infer_hostname(self, filepath: str) -> str:
-        """
-        Try to infer a hostname from the path structure.
 
-        Handles KAPE-like layouts where the path contains
-        ``<hostname>/C/Users/...`` or similar patterns.
-        Also looks for ``Users/<username>`` to extract
-        the username as a fallback.
-        """
-        # Normalise separators.
-        parts = filepath.replace("\\", "/").split("/")
+# ── Path analysis utilities ──────────────────────────────────────────────────
 
-        # Look for a KAPE-like pattern: <something>/C/Users/...
-        for i, part in enumerate(parts):
+def _infer_host_and_user(filepath: str) -> tuple[str, str]:
+    """
+    Infer hostname and Windows user account from the path.
+
+    Handles KAPE-like layouts::
+
+        <hostname>/C/Users/<user>/AppData/…
+        D:/CASOS/<case>/<hostname>/C/Users/<user>/…
+        C/Users/<user>/AppData/Roaming/AnyDesk/…
+
+    Returns ``(hostname, user_account)`` — either may be empty.
+    """
+    parts = filepath.replace("\\", "/").split("/")
+
+    hostname = ""
+    user_account = ""
+
+    # Generic names that are NOT hostnames.
+    _generic = {
+        "output", "export", "triage", "kape", "collection",
+        "evidence", "artifacts", "data", "case", "forensic",
+        "results", "extracted", "tmp", "temp", "casos", "",
+    }
+
+    for i, part in enumerate(parts):
+        # Detect drive-letter pattern: single alpha char followed by
+        # system dirs like Users, ProgramData, etc.
+        if (
+            len(part) == 1
+            and part.isalpha()
+            and i + 1 < len(parts)
+            and parts[i + 1] in (
+                "Users", "ProgramData", "Program Files",
+                "Program Files (x86)", "Windows",
+            )
+        ):
+            # The component before the drive letter is typically the hostname.
+            if i > 0 and not hostname:
+                candidate = parts[i - 1]
+                if candidate.lower() not in _generic and len(candidate) > 1:
+                    hostname = candidate
+
+        # Extract username from Users/<username>/…
+        if part == "Users" and i + 1 < len(parts):
+            candidate_user = parts[i + 1]
+            # Skip generic/system user folders.
+            _skip_users = {
+                "public", "default", "default user",
+                "all users", "defaultapppool",
+            }
             if (
-                len(part) == 1
-                and part.isalpha()
-                and i + 1 < len(parts)
-                and parts[i + 1] in ("Users", "ProgramData", "Program Files", "Windows")
+                candidate_user.lower() not in _skip_users
+                and not candidate_user.startswith(".")
+                and len(candidate_user) > 1
             ):
-                if i > 0:
-                    candidate = parts[i - 1]
-                    _generic = {
-                        "output", "export", "triage", "kape", "collection",
-                        "evidence", "artifacts", "data", "case", "forensic",
-                        "results", "extracted", "tmp", "temp", "",
-                    }
-                    if candidate.lower() not in _generic and len(candidate) > 1:
-                        return candidate
-                break
+                user_account = candidate_user
 
-        return ""
+    return hostname, user_account
 
 
 # ── Utility ──────────────────────────────────────────────────────────────────

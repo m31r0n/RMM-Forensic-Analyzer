@@ -113,6 +113,7 @@ class RMMSession:
             "end_dt":             self.end_dt,
             "duration_sec":       self.duration_sec,
             "hostname":           self.hostname,
+            "user_account":       self.extras.get("user_account", ""),
             "remote_ip":          self.remote_ip,
             "remote_version":     self.remote_version,
             "remote_os":          self.remote_os,

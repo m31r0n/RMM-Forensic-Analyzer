@@ -50,13 +50,47 @@ class ArchiveHandler:
 
     @staticmethod
     def is_archive(filepath: str) -> bool:
-        """Return *True* if *filepath* is a supported archive."""
-        # Check by extension first (fast).
+        """Return *True* if *filepath* is a valid, supported archive.
+
+        Validates using magic bytes — never trusts extension alone.
+        This avoids false positives from Windows ``$Recycle.Bin``
+        metadata files (``$I*.zip``) and other non-archive files
+        that happen to have an archive extension.
+        """
+        try:
+            size = os.path.getsize(filepath)
+        except OSError:
+            return False
+        # Skip tiny files (< 22 bytes is the minimum ZIP size).
+        if size < 22:
+            return False
+
         ext = os.path.splitext(filepath)[1].lower()
-        if ext in _ARCHIVE_EXTENSIONS:
-            return True
-        # Fall back to magic-number check for ZIP files without
-        # a standard extension.
+
+        # ZIP: rely on zipfile.is_zipfile which checks magic bytes.
+        if ext == ".zip" or ext == "":
+            try:
+                return zipfile.is_zipfile(filepath)
+            except OSError:
+                return False
+
+        # 7z: magic bytes 37 7A BC AF 27 1C
+        if ext == ".7z":
+            try:
+                with open(filepath, "rb") as f:
+                    return f.read(6) == b"7z\xbc\xaf\x27\x1c"
+            except OSError:
+                return False
+
+        # RAR: magic bytes "Rar!"
+        if ext == ".rar":
+            try:
+                with open(filepath, "rb") as f:
+                    return f.read(4) == b"Rar!"
+            except OSError:
+                return False
+
+        # Unknown extension — try ZIP magic as last resort.
         try:
             return zipfile.is_zipfile(filepath)
         except OSError:

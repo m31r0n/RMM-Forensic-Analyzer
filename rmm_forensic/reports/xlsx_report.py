@@ -224,7 +224,7 @@ def generate_xlsx(
     # ══════════════════════════════════════════════════════════════════════
     ws_s = wb.create_sheet("Sesiones")
     hdrs_s = [
-        "#", "RMM", "Hostname", "ID Remoto", "Alias", "Inicio", "Fin",
+        "#", "RMM", "Hostname", "Usuario", "ID Remoto", "Alias", "Inicio", "Fin",
         "Duración", "Transferencias", "Clipboard", "Texto",
         "Elevación", "IPs", "Riesgo", "Score",
     ]
@@ -241,6 +241,7 @@ def generate_xlsx(
         _cell(ws_s, i, col, i - 1); col += 1
         _rmm_cell(ws_s, i, col, s.rmm_type.value); col += 1
         _cell(ws_s, i, col, s.hostname); col += 1
+        _cell(ws_s, i, col, s.extras.get("user_account", "")); col += 1
         _cell(ws_s, i, col, s.remote_id); col += 1
         _cell(ws_s, i, col, s.alias); col += 1
         _cell(ws_s, i, col, fmt_dt(s.start_dt)); col += 1
@@ -294,7 +295,7 @@ def generate_xlsx(
     #  Hoja 3: Conexiones
     # ══════════════════════════════════════════════════════════════════════
     ws_c = wb.create_sheet("Conexiones")
-    hdrs_c = ["#", "RMM", "Dirección", "Fecha/Hora", "Usuario", "ID Remoto", "Alias", "Hostname"]
+    hdrs_c = ["#", "RMM", "Dirección", "Fecha/Hora", "Usuario", "ID Remoto", "Alias", "Hostname", "Cuenta Local"]
     for c, h in enumerate(hdrs_c, 1):
         _hdr(ws_c, 1, c, h)
 
@@ -312,8 +313,9 @@ def generate_xlsx(
         _cell(ws_c, i, 6, conn.remote_id)
         _cell(ws_c, i, 7, conn.alias)
         _cell(ws_c, i, 8, conn.hostname)
+        _cell(ws_c, i, 9, conn.extras.get("user_account", ""))
 
-    _set_widths(ws_c, [5, 16, 14, 22, 18, 16, 22, 18])
+    _set_widths(ws_c, [5, 16, 14, 22, 18, 16, 22, 18, 16])
 
     # ══════════════════════════════════════════════════════════════════════
     #  Hoja 4: Indicadores_Riesgo
