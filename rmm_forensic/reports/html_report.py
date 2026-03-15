@@ -418,7 +418,8 @@ tr:hover td{{background:#f4fafa}}
         <tr><th>IP</th><th>Tipo</th><th>Pais</th><th>ISP / AS</th>
         <th>AbuseIPDB</th><th>Reportes</th><th>Uso</th><th>TOR</th>
         <th>VT Maliciosos</th><th>VT Reputacion</th>
-        <th>CriminalIP Riesgo</th><th>CriminalIP Score</th></tr>
+        <th>CriminalIP Riesgo</th><th>CriminalIP Score</th>
+        <th>Puertos</th><th>CVEs</th><th>Flags</th></tr>
       </thead>
       <tbody>{ip_rows}</tbody>
     </table>
@@ -842,12 +843,32 @@ def _build_ip_rows(ip_results: list[IPEnrichment]) -> str:
             str(ipr.criminalip_score) if ipr.criminalip_score is not None else "\u2014"
         )
 
-        # VPN/Proxy indicators
+        # CriminalIP flag badges
+        _badge = '<span style="background:{bg};color:{fg};border-radius:3px;padding:.05rem .3rem;font-size:.7rem;margin-left:2px">{txt}</span>'
         extra_flags = ""
-        if ipr.criminalip_is_vpn:
-            extra_flags += ' <span style="background:#fef5e4;color:#d68910;border-radius:3px;padding:.05rem .3rem;font-size:.7rem">VPN</span>'
+        if ipr.criminalip_is_vpn or ipr.criminalip_is_anonymous_vpn:
+            extra_flags += _badge.format(bg="#fef5e4", fg="#d68910", txt="VPN")
         if ipr.criminalip_is_proxy:
-            extra_flags += ' <span style="background:#fef5e4;color:#d68910;border-radius:3px;padding:.05rem .3rem;font-size:.7rem">Proxy</span>'
+            extra_flags += _badge.format(bg="#fef5e4", fg="#d68910", txt="Proxy")
+        if ipr.criminalip_is_darkweb:
+            extra_flags += _badge.format(bg="#fadbd8", fg="#922b21", txt="DarkWeb")
+        if ipr.criminalip_is_scanner:
+            extra_flags += _badge.format(bg="#fadbd8", fg="#922b21", txt="Scanner")
+        if ipr.criminalip_is_hosting:
+            extra_flags += _badge.format(bg="#e8e8f5", fg="#3b3b8a", txt="Hosting")
+        if ipr.criminalip_is_cloud:
+            extra_flags += _badge.format(bg="#e8e8f5", fg="#3b3b8a", txt="Cloud")
+
+        # Port / Vuln counts
+        port_count = ipr.criminalip_open_port_count or 0
+        vuln_count = ipr.criminalip_vuln_count or 0
+        port_display = str(port_count) if port_count else "\u2014"
+        vuln_display = str(vuln_count) if vuln_count else "\u2014"
+        vuln_color = ""
+        if vuln_count >= 5:
+            vuln_color = "color:#c0392b;font-weight:700"
+        elif vuln_count > 0:
+            vuln_color = "color:#d68910;font-weight:700"
 
         # IP type badge
         tipo = ipr.ip_type or "\u2014"
@@ -870,8 +891,11 @@ def _build_ip_rows(ip_results: list[IPEnrichment]) -> str:
             f'<td>{tor_txt}</td>'
             f'<td style="{vt_color}">{vt_display}</td>'
             f'<td>{ipr.vt_reputation if ipr.vt_reputation is not None else "\u2014"}</td>'
-            f'<td style="{cip_risk_color}">{cip_risk}{extra_flags}</td>'
+            f'<td style="{cip_risk_color}">{cip_risk}</td>'
             f'<td>{cip_score}</td>'
+            f'<td>{port_display}</td>'
+            f'<td style="{vuln_color}">{vuln_display}</td>'
+            f'<td>{extra_flags or "\u2014"}</td>'
             f'</tr>'
         )
     return rows

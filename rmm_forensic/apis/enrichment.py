@@ -131,8 +131,38 @@ def _print_ip_result(e: IPEnrichment) -> None:
     if e.country:
         parts.append(f"País={e.country}")
 
-    if e.criminalip_is_vpn:
-        parts.append(f"{Fore.YELLOW}VPN{Style.RESET_ALL}")
+    # CriminalIP enrichment flags
+    flags = []
+    if e.criminalip_is_vpn or e.criminalip_is_anonymous_vpn:
+        flags.append("VPN")
+    if e.criminalip_is_proxy:
+        flags.append("Proxy")
+    if e.criminalip_is_darkweb:
+        flags.append("DarkWeb")
+    if e.criminalip_is_scanner:
+        flags.append("Scanner")
+    if e.criminalip_is_hosting:
+        flags.append("Hosting")
+    if e.criminalip_is_cloud:
+        flags.append("Cloud")
+    if flags:
+        parts.append(f"{Fore.YELLOW}{','.join(flags)}{Style.RESET_ALL}")
 
     if parts:
         print(f"    → {' | '.join(parts)}")
+
+    # CriminalIP detail line (ports, vulns, IDS)
+    details = []
+    if e.criminalip_open_port_count:
+        details.append(f"Puertos:{e.criminalip_open_port_count}")
+    if e.criminalip_vuln_count:
+        color = Fore.RED if e.criminalip_vuln_count >= 5 else Fore.YELLOW
+        details.append(f"CVEs:{color}{e.criminalip_vuln_count}{Style.RESET_ALL}")
+    if e.criminalip_domain_count:
+        details.append(f"Dominios:{e.criminalip_domain_count}")
+    if e.criminalip_ids_count:
+        details.append(f"{Fore.RED}IDS:{e.criminalip_ids_count}{Style.RESET_ALL}")
+    if e.criminalip_honeypot_count:
+        details.append(f"{Fore.RED}Honeypot:{e.criminalip_honeypot_count}{Style.RESET_ALL}")
+    if details:
+        print(f"      CIP detalle: {' | '.join(details)}")

@@ -1,7 +1,7 @@
 """Modelo de enriquecimiento de IP — datos de AbuseIPDB, VirusTotal, CriminalIP, TOR."""
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -30,15 +30,47 @@ class IPEnrichment:
     vt_reputation: Optional[int]   = None
     vt_error:      str             = ""
 
-    # CriminalIP
-    criminalip_score:   Optional[float] = None
-    criminalip_risk:    str             = ""     # "safe", "low", "moderate", "dangerous", "critical"
-    criminalip_country: str             = ""
-    criminalip_isp:     str             = ""
-    criminalip_is_vpn:  bool            = False
-    criminalip_is_proxy: bool           = False
-    criminalip_is_tor:  bool            = False
-    criminalip_error:   str             = ""
+    # CriminalIP — score & risk
+    criminalip_score:          Optional[float] = None
+    criminalip_score_outbound: Optional[float] = None
+    criminalip_risk:           str             = ""     # "safe", "low", "moderate", "dangerous", "critical"
+    criminalip_risk_outbound:  str             = ""
+    criminalip_error:          str             = ""
+
+    # CriminalIP — geo / ISP
+    criminalip_country: str = ""
+    criminalip_city:    str = ""
+    criminalip_isp:     str = ""
+    criminalip_as_no:   str = ""
+
+    # CriminalIP — issue flags
+    criminalip_is_vpn:           bool = False
+    criminalip_is_proxy:         bool = False
+    criminalip_is_tor:           bool = False
+    criminalip_is_cloud:         bool = False
+    criminalip_is_hosting:       bool = False
+    criminalip_is_darkweb:       bool = False
+    criminalip_is_scanner:       bool = False
+    criminalip_is_anonymous_vpn: bool = False
+
+    # CriminalIP — open ports
+    criminalip_open_port_count:  int             = 0
+    criminalip_open_ports:       list[str]       = field(default_factory=list)
+
+    # CriminalIP — vulnerabilities
+    criminalip_vuln_count:       int             = 0
+    criminalip_vulns:            list[str]       = field(default_factory=list)
+
+    # CriminalIP — domains / hostnames
+    criminalip_domain_count:     int             = 0
+    criminalip_hostname_count:   int             = 0
+    criminalip_hostnames:        list[str]       = field(default_factory=list)
+
+    # CriminalIP — IDS / honeypot / categories
+    criminalip_ids_count:        int             = 0
+    criminalip_ids_alerts:       list[str]       = field(default_factory=list)
+    criminalip_honeypot_count:   int             = 0
+    criminalip_categories:       list[str]       = field(default_factory=list)
 
     # TOR exit node
     is_tor_exit_node:   bool            = False
@@ -64,6 +96,8 @@ class IPEnrichment:
             or self.criminalip_is_vpn
             or self.criminalip_is_proxy
             or self.criminalip_is_tor
+            or self.criminalip_is_darkweb
+            or self.criminalip_is_scanner
         )
 
     @property
@@ -102,14 +136,34 @@ class IPEnrichment:
                 "error":      self.vt_error,
             },
             "criminalip": {
-                "score":    self.criminalip_score,
-                "risk":     self.criminalip_risk,
-                "country":  self.criminalip_country,
-                "isp":      self.criminalip_isp,
-                "is_vpn":   self.criminalip_is_vpn,
-                "is_proxy": self.criminalip_is_proxy,
-                "is_tor":   self.criminalip_is_tor,
-                "error":    self.criminalip_error,
+                "score":          self.criminalip_score,
+                "score_outbound": self.criminalip_score_outbound,
+                "risk":           self.criminalip_risk,
+                "risk_outbound":  self.criminalip_risk_outbound,
+                "country":        self.criminalip_country,
+                "city":           self.criminalip_city,
+                "isp":            self.criminalip_isp,
+                "as_no":          self.criminalip_as_no,
+                "is_vpn":         self.criminalip_is_vpn,
+                "is_proxy":       self.criminalip_is_proxy,
+                "is_tor":         self.criminalip_is_tor,
+                "is_cloud":       self.criminalip_is_cloud,
+                "is_hosting":     self.criminalip_is_hosting,
+                "is_darkweb":     self.criminalip_is_darkweb,
+                "is_scanner":     self.criminalip_is_scanner,
+                "is_anonymous_vpn": self.criminalip_is_anonymous_vpn,
+                "open_port_count": self.criminalip_open_port_count,
+                "open_ports":     self.criminalip_open_ports,
+                "vuln_count":     self.criminalip_vuln_count,
+                "vulns":          self.criminalip_vulns,
+                "domain_count":   self.criminalip_domain_count,
+                "hostname_count": self.criminalip_hostname_count,
+                "hostnames":      self.criminalip_hostnames,
+                "ids_count":      self.criminalip_ids_count,
+                "ids_alerts":     self.criminalip_ids_alerts,
+                "honeypot_count": self.criminalip_honeypot_count,
+                "categories":     self.criminalip_categories,
+                "error":          self.criminalip_error,
             },
             "is_tor": self.is_tor,
             "country": self.country,

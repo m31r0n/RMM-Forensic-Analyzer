@@ -156,7 +156,9 @@ def generate_csvs(
         fields = ["ip", "tipo", "pais", "isp", "abuse_score", "reportes",
                   "uso", "tor", "vt_malicious", "vt_suspicious",
                   "vt_reputation", "criminalip_risk", "criminalip_score",
-                  "vpn", "proxy"]
+                  "vpn", "proxy", "puertos_abiertos", "cves",
+                  "dominios", "scanner", "darkweb", "hosting", "cloud",
+                  "ids_alertas", "honeypot", "categorias"]
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         for e in ip_results:
@@ -176,6 +178,16 @@ def generate_csvs(
                 "criminalip_score": e.criminalip_score if e.criminalip_score is not None else "",
                 "vpn": "SI" if e.criminalip_is_vpn else "",
                 "proxy": "SI" if e.criminalip_is_proxy else "",
+                "puertos_abiertos": e.criminalip_open_port_count or "",
+                "cves": e.criminalip_vuln_count or "",
+                "dominios": e.criminalip_domain_count or "",
+                "scanner": "SI" if e.criminalip_is_scanner else "",
+                "darkweb": "SI" if e.criminalip_is_darkweb else "",
+                "hosting": "SI" if e.criminalip_is_hosting else "",
+                "cloud": "SI" if e.criminalip_is_cloud else "",
+                "ids_alertas": e.criminalip_ids_count or "",
+                "honeypot": e.criminalip_honeypot_count or "",
+                "categorias": "; ".join(e.criminalip_categories) if e.criminalip_categories else "",
             })
 
     # ── 6. cross_rmm_correlation.csv (solo si hay IPs cross-RMM) ────────

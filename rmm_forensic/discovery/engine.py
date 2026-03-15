@@ -177,6 +177,32 @@ class LogDiscoveryEngine:
                 if entry.is_dir(follow_symlinks=False):
                     dirs.append(entry.path)
                 elif entry.is_file(follow_symlinks=False):
+                    # If the file is an archive, extract and recurse.
+                    if self._archive_handler.is_archive(entry.path):
+                        try:
+                            tmp_dir = self._archive_handler.extract(entry.path)
+                            logger.info(
+                                "Extracted nested archive %s -> %s",
+                                entry.path, tmp_dir,
+                            )
+                            # Detect KAPE inside the archive.
+                            inner_kape = detect_kape_output(tmp_dir)
+                            inner_hostname = kape_hostname
+                            if inner_kape:
+                                inner_hostname = (
+                                    extract_hostname_from_kape(tmp_dir)
+                                    or kape_hostname
+                                )
+                            self._walk_scandir(
+                                tmp_dir, rmm_filter, results, inner_hostname,
+                            )
+                        except Exception as exc:
+                            logger.error(
+                                "Failed to extract archive %s: %s",
+                                entry.path, exc,
+                            )
+                        continue
+
                     match = self._match_file(entry.path, rmm_filter)
                     if match:
                         if kape_hostname and not match.hostname:

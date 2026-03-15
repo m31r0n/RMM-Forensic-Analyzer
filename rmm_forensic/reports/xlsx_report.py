@@ -346,6 +346,9 @@ def generate_xlsx(
         "VT Maliciosos", "VT Sospechosos", "VT Reputación",
         "CriminalIP Risk", "CriminalIP Score",
         "VPN", "Proxy",
+        "Puertos", "CVEs", "Dominios",
+        "Scanner", "DarkWeb", "Hosting", "Cloud",
+        "IDS Alertas", "Honeypot",
     ]
     for c, h in enumerate(hdrs_ip, 1):
         _hdr(ws_ip, 1, c, h)
@@ -415,7 +418,52 @@ def generate_xlsx(
         if e.criminalip_is_proxy:
             c15.fill = PatternFill("solid", fgColor="FDEBD0")
 
-    _set_widths(ws_ip, [17, 12, 8, 30, 15, 10, 22, 10, 14, 14, 12, 14, 14, 10, 10])
+        # Open Ports count
+        _cell(ws_ip, r, 16, e.criminalip_open_port_count or "")
+
+        # CVEs count
+        vuln_c = e.criminalip_vuln_count
+        c17 = _cell(ws_ip, r, 17, vuln_c or "")
+        if vuln_c and vuln_c >= 5:
+            c17.fill = PatternFill("solid", fgColor="FADBD8")
+            c17.font = Font(bold=True, color=RED_HEX)
+        elif vuln_c and vuln_c > 0:
+            c17.fill = PatternFill("solid", fgColor="FDEBD0")
+
+        # Domain count
+        _cell(ws_ip, r, 18, e.criminalip_domain_count or "")
+
+        # Scanner
+        c19 = _cell(ws_ip, r, 19, "SÍ" if e.criminalip_is_scanner else "No")
+        if e.criminalip_is_scanner:
+            c19.fill = PatternFill("solid", fgColor="FADBD8")
+
+        # DarkWeb
+        c20 = _cell(ws_ip, r, 20, "SÍ" if e.criminalip_is_darkweb else "No")
+        if e.criminalip_is_darkweb:
+            c20.fill = PatternFill("solid", fgColor="FADBD8")
+            c20.font = Font(bold=True, color=RED_HEX)
+
+        # Hosting
+        _cell(ws_ip, r, 21, "SÍ" if e.criminalip_is_hosting else "No")
+
+        # Cloud
+        _cell(ws_ip, r, 22, "SÍ" if e.criminalip_is_cloud else "No")
+
+        # IDS alert count
+        ids_c = e.criminalip_ids_count
+        c23 = _cell(ws_ip, r, 23, ids_c or "")
+        if ids_c and ids_c > 0:
+            c23.fill = PatternFill("solid", fgColor="FADBD8")
+
+        # Honeypot count
+        hp_c = e.criminalip_honeypot_count
+        c24 = _cell(ws_ip, r, 24, hp_c or "")
+        if hp_c and hp_c > 0:
+            c24.fill = PatternFill("solid", fgColor="FADBD8")
+
+    _set_widths(ws_ip, [17, 12, 8, 30, 15, 10, 22, 10, 14, 14, 12, 14, 14, 10, 10,
+                        10, 10, 10, 10, 10, 10, 10, 10, 10])
 
     # ══════════════════════════════════════════════════════════════════════
     #  Hoja 6: Correlación_Cross_RMM  (solo si cross_rmm_ips tiene datos)

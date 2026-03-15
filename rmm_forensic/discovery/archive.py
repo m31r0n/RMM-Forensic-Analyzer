@@ -3,21 +3,45 @@ ZIP and archive handling for the log discovery engine.
 
 Provides a context-manager that extracts archives to temporary
 directories and cleans them up on exit.
+
+Supports standard ZIP (via zipfile), and falls back to 7-Zip CLI
+or PowerShell Expand-Archive when the built-in module cannot handle
+the compression method (e.g. DEFLATE64, PPMd).
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Extensions we recognise as archives (case-insensitive).
+_ARCHIVE_EXTENSIONS = {".zip", ".7z", ".rar"}
+
+
+def _find_7z() -> str | None:
+    """Return the path to the 7z executable, or *None*."""
+    # Check common Windows install locations first.
+    candidates = [
+        shutil.which("7z"),
+        shutil.which("7za"),
+        r"C:\Program Files\7-Zip\7z.exe",
+        r"C:\Program Files (x86)\7-Zip\7z.exe",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    return None
+
 
 class ArchiveHandler:
-    """Extract ZIP archives to temporary directories for analysis."""
+    """Extract ZIP / 7z / RAR archives to temporary directories for analysis."""
 
     def __init__(self) -> None:
         self._temp_dirs: list[str] = []
@@ -26,7 +50,13 @@ class ArchiveHandler:
 
     @staticmethod
     def is_archive(filepath: str) -> bool:
-        """Return *True* if *filepath* is a supported archive (ZIP)."""
+        """Return *True* if *filepath* is a supported archive."""
+        # Check by extension first (fast).
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext in _ARCHIVE_EXTENSIONS:
+            return True
+        # Fall back to magic-number check for ZIP files without
+        # a standard extension.
         try:
             return zipfile.is_zipfile(filepath)
         except OSError:
@@ -34,38 +64,73 @@ class ArchiveHandler:
 
     def extract(self, filepath: str) -> str:
         """
-        Extract a ZIP archive to a fresh temporary directory.
+        Extract an archive to a fresh temporary directory.
 
         Returns the path to the temporary directory containing the
         extracted files.  The directory is tracked and will be removed
         when :meth:`cleanup` is called (or when the context manager
         exits).
 
+        Tries (in order):
+        1. Python ``zipfile`` (standard ZIP compression methods).
+        2. External ``7z`` CLI (DEFLATE64, PPMd, 7z, RAR, …).
+        3. PowerShell ``Expand-Archive`` (last resort, ZIP only).
+
         Raises
         ------
-        zipfile.BadZipFile
-            If the file is not a valid ZIP archive.
-        OSError
-            If extraction fails for filesystem reasons.
+        RuntimeError
+            If none of the extraction methods succeed.
         """
         tmp_dir = tempfile.mkdtemp(prefix="rmm_forensic_")
         self._temp_dirs.append(tmp_dir)
 
         logger.info("Extracting %s -> %s", filepath, tmp_dir)
 
-        with zipfile.ZipFile(filepath, "r") as zf:
-            # Guard against path-traversal (zip-slip) attacks.
-            for member in zf.infolist():
-                target = Path(tmp_dir) / member.filename
-                resolved = target.resolve()
-                if not str(resolved).startswith(str(Path(tmp_dir).resolve())):
-                    logger.warning(
-                        "Skipping suspicious zip member: %s", member.filename
-                    )
-                    continue
-                zf.extract(member, tmp_dir)
+        ext = os.path.splitext(filepath)[1].lower()
 
-        return tmp_dir
+        # ── Attempt 1: Python zipfile (fast, but limited methods) ─────
+        if ext in (".zip", "") or zipfile.is_zipfile(filepath):
+            try:
+                self._extract_zipfile(filepath, tmp_dir)
+                return tmp_dir
+            except NotImplementedError as exc:
+                logger.warning(
+                    "zipfile cannot handle %s (%s), trying fallbacks…",
+                    filepath, exc,
+                )
+            except (zipfile.BadZipFile, OSError) as exc:
+                logger.warning(
+                    "zipfile failed for %s (%s), trying fallbacks…",
+                    filepath, exc,
+                )
+
+        # ── Attempt 2: 7-Zip CLI ─────────────────────────────────────
+        sevenz = _find_7z()
+        if sevenz:
+            try:
+                self._extract_7z(sevenz, filepath, tmp_dir)
+                return tmp_dir
+            except Exception as exc:
+                logger.warning("7z extraction failed for %s: %s", filepath, exc)
+        else:
+            logger.debug("7-Zip not found on this system")
+
+        # ── Attempt 3: PowerShell Expand-Archive (ZIP only) ───────────
+        if ext == ".zip" or zipfile.is_zipfile(filepath):
+            try:
+                self._extract_powershell(filepath, tmp_dir)
+                return tmp_dir
+            except Exception as exc:
+                logger.warning(
+                    "PowerShell Expand-Archive failed for %s: %s",
+                    filepath, exc,
+                )
+
+        raise RuntimeError(
+            f"No se pudo extraer el archivo {filepath}. "
+            "Instale 7-Zip (https://7-zip.org) para soportar "
+            "métodos de compresión avanzados."
+        )
 
     def cleanup(self) -> None:
         """Remove all temporary directories created by :meth:`extract`."""
@@ -84,3 +149,55 @@ class ArchiveHandler:
 
     def __exit__(self, *args: object) -> None:
         self.cleanup()
+
+    # ── Private extraction strategies ────────────────────────────────────
+
+    @staticmethod
+    def _extract_zipfile(filepath: str, tmp_dir: str) -> None:
+        """Extract using Python's built-in ``zipfile`` module."""
+        with zipfile.ZipFile(filepath, "r") as zf:
+            for member in zf.infolist():
+                # Guard against path-traversal (zip-slip) attacks.
+                target = Path(tmp_dir) / member.filename
+                resolved = target.resolve()
+                if not str(resolved).startswith(str(Path(tmp_dir).resolve())):
+                    logger.warning(
+                        "Skipping suspicious zip member: %s", member.filename
+                    )
+                    continue
+                zf.extract(member, tmp_dir)
+
+    @staticmethod
+    def _extract_7z(sevenz: str, filepath: str, tmp_dir: str) -> None:
+        """Extract using the 7-Zip CLI."""
+        result = subprocess.run(
+            [sevenz, "x", filepath, f"-o{tmp_dir}", "-y", "-bso0", "-bsp0"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"7z exit code {result.returncode}: {result.stderr.strip()}"
+            )
+
+    @staticmethod
+    def _extract_powershell(filepath: str, tmp_dir: str) -> None:
+        """Extract a ZIP using PowerShell ``Expand-Archive``."""
+        # Use .NET's System.IO.Compression for better method support.
+        ps_script = (
+            "Add-Type -AssemblyName System.IO.Compression.FileSystem; "
+            "[System.IO.Compression.ZipFile]::ExtractToDirectory("
+            f"'{filepath}', '{tmp_dir}')"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"PowerShell exit code {result.returncode}: "
+                f"{result.stderr.strip()}"
+            )
