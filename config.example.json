@@ -1,0 +1,12 @@
+{
+  "_comment": "Copia este archivo como config.json y rellena tus API keys. config.json está en .gitignore — nunca se subirá a Git.",
+  "virustotal_api_key": "",
+  "abuseipdb_api_key": "",
+  "criminalip_api_key": "",
+  "default_output_dir": "output_forense",
+  "ip_cache_file": "ip_cache.json",
+  "max_age_days_abuseipdb": 90,
+  "vt_rate_limit_sleep": 0.5,
+  "tor_exit_node_cache": "tor_exit_nodes.txt",
+  "theme_color": "#1A8080"
+}

@@ -1,0 +1,50 @@
+# ─── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env
+
+# ─── Configuración con claves reales (NUNCA subir) ──────
+config.json
+ip_cache.json
+*.cache
+
+# ─── Salidas del analizador (datos de casos reales) ──────
+output_forense*/
+output_*/
+caso_*/
+*.xlsx
+*.html
+/csv/
+
+# ─── Archivos de trazas (datos forenses — NO subir) ──────
+ad.trace
+ad_svc.trace
+connection_trace.txt
+*.trace
+thumbnails/
+chat/
+
+# ─── IDEs y herramientas ─────────────────────────────────
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Testing ─────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
