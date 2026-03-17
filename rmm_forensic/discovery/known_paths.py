@@ -80,7 +80,9 @@ FILE_PATTERNS: dict[str, list[str]] = {
     "AnyDesk": [
         "ad.trace",
         "ad_svc.trace",
+        "ad_mini.trace",
         "connection_trace.txt",
+        "ad_chat.trace",
     ],
     "TeamViewer": [
         "Connections_incoming.txt",
@@ -106,4 +108,33 @@ FILE_PATTERNS: dict[str, list[str]] = {
         "*.log",
         "connection.log*",
     ],
+}
+
+# ── Directory-level hints (OS-aware) ─────────────────────────────────────────
+# Used in Pass 2 of file matching: if a file lives inside one of these
+# directory name patterns AND has a plausible log extension, it is tagged
+# with low confidence.
+#
+# Each key maps to a dict of OS -> list[str].
+# "common" hints apply regardless of the target OS.
+
+DIR_HINTS: dict[str, dict[str, list[str]]] = {
+    "AnyDesk": {
+        "common": ["anydesk"],
+    },
+    "TeamViewer": {
+        "common": ["teamviewer"],
+    },
+    "ScreenConnect": {
+        "common": ["screenconnect", "connectwise control", "connectwisecontrol"],
+    },
+    "Chrome Remote Desktop": {
+        "common": ["chrome remote desktop", "chromoting", "chrome-remote-desktop"],
+    },
+    "Splashtop": {
+        "common": ["splashtop"],
+    },
+    "RustDesk": {
+        "common": ["rustdesk"],
+    },
 }

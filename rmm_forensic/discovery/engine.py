@@ -4,11 +4,19 @@ Main log discovery engine.
 Orchestrates directory walking, filename matching, content-signature
 verification, ZIP extraction, and KAPE detection to locate RMM log
 files in an arbitrary input path.
+
+The engine **never** attempts to extract nested archives found during
+the walk.  Only the top-level path supplied by the caller is extracted
+if it is a supported archive.  This prevents wasting time on false-
+positive files (e.g. Windows ``$Recycle.Bin`` metadata) and keeps the
+analysis scope under the analyst's control.
 """
 
 from __future__ import annotations
 
+import enum
 import fnmatch
+import hashlib
 import logging
 import os
 from dataclasses import dataclass, field
@@ -16,14 +24,25 @@ from typing import Optional
 
 from .archive import ArchiveHandler
 from .kape import detect_kape_output, extract_hostname_from_kape
-from .known_paths import FILE_PATTERNS
+from .known_paths import FILE_PATTERNS, KNOWN_PATHS, DIR_HINTS
 from .signatures import identify_rmm
 
 logger = logging.getLogger(__name__)
 
 
-# Directories that never contain useful RMM logs and should be skipped.
-_SKIP_DIRS: set[str] = {
+# ── Target OS ────────────────────────────────────────────────────────────────
+
+class TargetOS(enum.Enum):
+    """Operating system of the evidence source."""
+    WINDOWS = "windows"
+    LINUX   = "linux"
+    MACOS   = "macos"
+    AUTO    = "auto"      # Detect from path structure
+
+
+# Directories that never contain useful RMM logs and should be skipped
+# (case-insensitive comparison).
+_SKIP_DIRS_WINDOWS: set[str] = {
     "$recycle.bin",
     "system volume information",
     "$winreagent",
@@ -31,10 +50,56 @@ _SKIP_DIRS: set[str] = {
     "$windows.~ws",
     "windows.old",
     "config.msi",
-    "__pycache__",
-    ".git",
-    "node_modules",
+    "windows",
+    "boot",
+    "recovery",
+    "$sysreset",
+    "perflogs",
 }
+
+_SKIP_DIRS_LINUX: set[str] = {
+    "proc", "sys", "dev", "run", "snap", "boot", "lost+found",
+}
+
+_SKIP_DIRS_MACOS: set[str] = {
+    ".spotlight-v100", ".fseventsd", ".trashes",
+}
+
+_SKIP_DIRS_COMMON: set[str] = {
+    "__pycache__", ".git", "node_modules", ".svn", ".hg",
+}
+
+
+def _skip_dirs_for_os(target_os: TargetOS) -> set[str]:
+    """Return the set of directory names to skip for the given OS."""
+    base = set(_SKIP_DIRS_COMMON)
+    if target_os in (TargetOS.WINDOWS, TargetOS.AUTO):
+        base |= _SKIP_DIRS_WINDOWS
+    if target_os in (TargetOS.LINUX, TargetOS.AUTO):
+        base |= _SKIP_DIRS_LINUX
+    if target_os in (TargetOS.MACOS, TargetOS.AUTO):
+        base |= _SKIP_DIRS_MACOS
+    return base
+
+
+def _detect_os_from_path(dirpath: str) -> TargetOS:
+    """Heuristic: detect OS from directory structure."""
+    norm = dirpath.replace("\\", "/").lower()
+    # macOS indicators (check BEFORE Windows — both have /Users/)
+    if "/library/application support/" in norm or "/library/logs/" in norm:
+        return TargetOS.MACOS
+    # Linux indicators
+    if any(marker in norm for marker in (
+        "/home/", "/etc/", "/var/log/", "/opt/",
+    )):
+        return TargetOS.LINUX
+    # Windows indicators
+    if any(marker in norm for marker in (
+        "/users/", "/programdata/", "/program files/",
+        "/windows/", "/appdata/",
+    )):
+        return TargetOS.WINDOWS
+    return TargetOS.WINDOWS   # Default for KAPE/forensic images
 
 
 # ── Discovered file model ────────────────────────────────────────────────────
@@ -47,7 +112,7 @@ class DiscoveredFile:
     rmm_type: str           # RMM name (matches RMMType.value)
     filename: str
     hostname: str = ""      # Inferred hostname (from KAPE structure, etc.)
-    user_account: str = ""  # Windows user from path (Users/<user>/…)
+    user_account: str = ""  # OS user from path (Users/<user>/…, /home/<user>/…)
     confidence: str = ""    # "high" (filename match), "medium" (content), "low" (path)
     size_bytes: int = 0
 
@@ -64,10 +129,17 @@ class LogDiscoveryEngine:
     1. **Filename matching** (fast) -- compares against ``FILE_PATTERNS``.
     2. **Content-signature verification** (slower) -- reads first N lines
        of ambiguous files to positively identify the producing RMM tool.
+
+    Nested archives found during the walk are **ignored** — only the
+    top-level input path is extracted if it is an archive.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, target_os: TargetOS = TargetOS.AUTO) -> None:
         self._archive_handler = ArchiveHandler()
+        self._target_os = target_os
+        self._skip_dirs: set[str] = set()      # populated in discover()
+        self._resolved_os: TargetOS = target_os
+        self.input_hash: str = ""               # SHA-256 of original archive
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -96,6 +168,12 @@ class LogDiscoveryEngine:
 
         if os.path.isfile(input_path):
             if self._archive_handler.is_archive(input_path):
+                # Hash the original evidence file for chain-of-custody.
+                self.input_hash = _sha256_file(input_path)
+                logger.info(
+                    "Evidence hash (SHA-256): %s  file: %s",
+                    self.input_hash, input_path,
+                )
                 try:
                     tmp_dir = self._archive_handler.extract(input_path)
                     results.extend(self._discover_in_directory(tmp_dir, rmm_filter))
@@ -159,6 +237,15 @@ class LogDiscoveryEngine:
         """Recursively search *dirpath* for RMM logs using os.scandir."""
         results: list[DiscoveredFile] = []
 
+        # Resolve OS if AUTO.
+        if self._target_os == TargetOS.AUTO:
+            self._resolved_os = _detect_os_from_path(dirpath)
+            logger.info("Auto-detected target OS: %s", self._resolved_os.value)
+        else:
+            self._resolved_os = self._target_os
+
+        self._skip_dirs = _skip_dirs_for_os(self._resolved_os)
+
         # Detect KAPE structure once at the top level.
         is_kape = detect_kape_output(dirpath)
         kape_hostname = ""
@@ -180,7 +267,7 @@ class LogDiscoveryEngine:
         results: list[DiscoveredFile],
         kape_hostname: str,
     ) -> None:
-        """Lazy recursive walk using os.scandir for performance."""
+        """Recursive walk — matches files only, never extracts nested archives."""
         try:
             with os.scandir(dirpath) as it:
                 entries = list(it)
@@ -192,38 +279,11 @@ class LogDiscoveryEngine:
         for entry in entries:
             try:
                 if entry.is_dir(follow_symlinks=False):
-                    # Skip Windows system directories and other junk.
-                    if entry.name.lower() in _SKIP_DIRS:
+                    if entry.name.lower() in self._skip_dirs:
                         logger.debug("Skipping system directory: %s", entry.path)
                         continue
                     dirs.append(entry.path)
                 elif entry.is_file(follow_symlinks=False):
-                    # If the file is a valid archive, extract and recurse.
-                    if self._archive_handler.is_archive(entry.path):
-                        try:
-                            tmp_dir = self._archive_handler.extract(entry.path)
-                            logger.info(
-                                "Extracted nested archive %s -> %s",
-                                entry.path, tmp_dir,
-                            )
-                            # Detect KAPE inside the archive.
-                            inner_kape = detect_kape_output(tmp_dir)
-                            inner_hostname = kape_hostname
-                            if inner_kape:
-                                inner_hostname = (
-                                    extract_hostname_from_kape(tmp_dir)
-                                    or kape_hostname
-                                )
-                            self._walk_scandir(
-                                tmp_dir, rmm_filter, results, inner_hostname,
-                            )
-                        except Exception as exc:
-                            logger.error(
-                                "Failed to extract archive %s: %s",
-                                entry.path, exc,
-                            )
-                        continue
-
                     match = self._match_file(entry.path, rmm_filter)
                     if match:
                         if kape_hostname and not match.hostname:
@@ -232,7 +292,6 @@ class LogDiscoveryEngine:
             except OSError as exc:
                 logger.debug("Error inspecting %s: %s", entry.path, exc)
 
-        # Recurse into subdirectories.
         for d in dirs:
             self._walk_scandir(d, rmm_filter, results, kape_hostname)
 
@@ -274,14 +333,14 @@ class LogDiscoveryEngine:
                 continue
             for pattern in patterns:
                 if fnmatch.fnmatch(filename, pattern):
-                    # Distinguish "specific" patterns (no wildcard or very
-                    # specific like "ad.trace") from generic ("*.log").
                     if pattern in ("*.log",):
                         generic_matches.append(rmm_name)
                     else:
                         exact_matches.append(rmm_name)
 
-        hostname, user_account = _infer_host_and_user(filepath)
+        hostname, user_account = _infer_host_and_user(
+            filepath, self._resolved_os,
+        )
 
         # Unique exact match -> high confidence.
         if len(exact_matches) == 1:
@@ -311,24 +370,21 @@ class LogDiscoveryEngine:
                     size_bytes=size_bytes,
                 )
 
-        # ── Pass 2: path-based heuristic ────────────────────────────────
+        # ── Pass 2: path-based heuristic (directory name hints) ──────────
         path_lower = filepath.lower().replace("\\", "/")
-        _rmm_dir_hints: dict[str, list[str]] = {
-            "AnyDesk": ["anydesk"],
-            "TeamViewer": ["teamviewer"],
-            "ScreenConnect": ["screenconnect", "connectwise control"],
-            "Chrome Remote Desktop": ["chrome remote desktop", "chromoting"],
-            "Splashtop": ["splashtop"],
-            "RustDesk": ["rustdesk"],
-        }
-        for rmm_name, hints in _rmm_dir_hints.items():
+        os_key = self._resolved_os.value
+        for rmm_name, os_hints in DIR_HINTS.items():
             if rmm_filter and rmm_name not in rmm_filter:
                 continue
+            # Use OS-specific hints + common hints.
+            hints = os_hints.get(os_key, []) + os_hints.get("common", [])
             for hint in hints:
                 if hint in path_lower:
-                    # Only accept if the file has a plausible extension.
                     _, ext = os.path.splitext(filename)
-                    if ext.lower() in (".log", ".txt", ".trace", ".db", ".config", ""):
+                    if ext.lower() in (
+                        ".log", ".txt", ".trace", ".db", ".sqlite",
+                        ".config", ".conf", ".json", ".xml", "",
+                    ):
                         return DiscoveredFile(
                             filepath=filepath,
                             rmm_type=rmm_name,
@@ -344,15 +400,21 @@ class LogDiscoveryEngine:
 
 # ── Path analysis utilities ──────────────────────────────────────────────────
 
-def _infer_host_and_user(filepath: str) -> tuple[str, str]:
+def _infer_host_and_user(
+    filepath: str, target_os: TargetOS = TargetOS.WINDOWS,
+) -> tuple[str, str]:
     """
-    Infer hostname and Windows user account from the path.
+    Infer hostname and user account from the path.
 
-    Handles KAPE-like layouts::
+    Handles KAPE-like layouts (Windows)::
 
         <hostname>/C/Users/<user>/AppData/…
         D:/CASOS/<case>/<hostname>/C/Users/<user>/…
-        C/Users/<user>/AppData/Roaming/AnyDesk/…
+
+    And Linux/macOS layouts::
+
+        <hostname>/home/<user>/…
+        <hostname>/Users/<user>/…   (macOS)
 
     Returns ``(hostname, user_account)`` — either may be empty.
     """
@@ -361,16 +423,20 @@ def _infer_host_and_user(filepath: str) -> tuple[str, str]:
     hostname = ""
     user_account = ""
 
-    # Generic names that are NOT hostnames.
     _generic = {
         "output", "export", "triage", "kape", "collection",
         "evidence", "artifacts", "data", "case", "forensic",
         "results", "extracted", "tmp", "temp", "casos", "",
     }
 
+    _skip_users = {
+        "public", "default", "default user", "all users",
+        "defaultapppool", "nobody", "daemon", "root",
+        "shared",
+    }
+
     for i, part in enumerate(parts):
-        # Detect drive-letter pattern: single alpha char followed by
-        # system dirs like Users, ProgramData, etc.
+        # ── Windows: <hostname>/C/Users/… ─────────────────────────────
         if (
             len(part) == 1
             and part.isalpha()
@@ -380,20 +446,14 @@ def _infer_host_and_user(filepath: str) -> tuple[str, str]:
                 "Program Files (x86)", "Windows",
             )
         ):
-            # The component before the drive letter is typically the hostname.
             if i > 0 and not hostname:
                 candidate = parts[i - 1]
                 if candidate.lower() not in _generic and len(candidate) > 1:
                     hostname = candidate
 
-        # Extract username from Users/<username>/…
-        if part == "Users" and i + 1 < len(parts):
+        # ── Extract username: Users/<user>/ or home/<user>/ ───────────
+        if part in ("Users", "home") and i + 1 < len(parts):
             candidate_user = parts[i + 1]
-            # Skip generic/system user folders.
-            _skip_users = {
-                "public", "default", "default user",
-                "all users", "defaultapppool",
-            }
             if (
                 candidate_user.lower() not in _skip_users
                 and not candidate_user.startswith(".")
@@ -402,6 +462,24 @@ def _infer_host_and_user(filepath: str) -> tuple[str, str]:
                 user_account = candidate_user
 
     return hostname, user_account
+
+
+# ── Evidence integrity ───────────────────────────────────────────────────────
+
+def _sha256_file(filepath: str, chunk_size: int = 1 << 20) -> str:
+    """Compute SHA-256 hash of a file (streaming, memory-safe)."""
+    h = hashlib.sha256()
+    try:
+        with open(filepath, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                h.update(chunk)
+    except OSError as exc:
+        logger.warning("Cannot hash %s: %s", filepath, exc)
+        return ""
+    return h.hexdigest()
 
 
 # ── Utility ──────────────────────────────────────────────────────────────────

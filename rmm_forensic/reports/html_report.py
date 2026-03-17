@@ -52,6 +52,7 @@ def generate_html(
     dr = summary.date_range_conn
     date_range = f"{fmt_dt(dr[0])} \u2192 {fmt_dt(dr[1])}" if dr else "\u2014"
     files_str = " | ".join(meta.get("files", []))
+    evidence_sha256 = meta.get("evidence_sha256", "")
 
     has_anydesk = "AnyDesk" in rmm_types
     has_incident_date = incident is not None and incident.has_incident_date
@@ -256,6 +257,7 @@ tr:hover td{{background:#f4fafa}}
       <div style="font-size:.78rem;opacity:.75;letter-spacing:.08em;text-transform:uppercase">Analisis Forense Digital</div>
       <h1>Informe Forense RMM</h1>
       <div class="hdr-meta">Generado: {now} &nbsp;&middot;&nbsp; {files_str} &nbsp;&middot;&nbsp; {TOOL_NAME} v{__version__}</div>
+      {'<div class="hdr-meta" style="font-family:monospace;font-size:.72rem;opacity:.65">SHA-256: ' + evidence_sha256 + '</div>' if evidence_sha256 else ''}
     </div>
   </div>
   <div class="hdr-tags" style="margin-top:1rem">

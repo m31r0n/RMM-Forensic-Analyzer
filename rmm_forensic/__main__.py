@@ -22,7 +22,7 @@ from .models.enrichment import IPEnrichment
 from .models.incident import IncidentContext
 from .models.summary import ForensicSummary
 from .parsers import ParserRegistry
-from .discovery import LogDiscoveryEngine, DiscoveredFile
+from .discovery import LogDiscoveryEngine, DiscoveredFile, TargetOS
 from .analyzer import (
     score_all,
     correlate,
@@ -150,19 +150,33 @@ def _discover_and_parse(
     input_path: str,
     rmm_filter: list[str] | None = None,
     hostname_filter: str = "",
-) -> tuple[list[ParseResult], list[DiscoveredFile]]:
+    target_os: TargetOS = TargetOS.AUTO,
+) -> tuple[list[ParseResult], list[DiscoveredFile], str]:
     """
     Discover RMM log files in *input_path*, parse each with the
     appropriate parser, and return merged ParseResults grouped by RMM
-    together with the list of discovered files.
+    together with the list of discovered files and the evidence hash.
     """
-    engine = LogDiscoveryEngine()
+    engine = LogDiscoveryEngine(target_os=target_os)
+    evidence_hash = ""
     try:
         discovered = engine.discover(input_path, rmm_filter=rmm_filter)
+        evidence_hash = engine.input_hash
+
+        # Show evidence hash if available (chain-of-custody).
+        if evidence_hash:
+            cprint(f"  [SHA-256] {evidence_hash}", Fore.CYAN)
+
+        # Show detected OS.
+        if engine._resolved_os != TargetOS.AUTO:
+            cprint(
+                f"  [SO Objetivo] {engine._resolved_os.value.capitalize()}",
+                Fore.CYAN,
+            )
 
         if not discovered:
             cprint("  [!] No se encontraron archivos de log RMM", Fore.YELLOW)
-            return [], []
+            return [], [], evidence_hash
 
         # Print discovery summary
         cprint(f"\n  Archivos descubiertos: {len(discovered)}", Fore.CYAN)
@@ -210,7 +224,7 @@ def _discover_and_parse(
     finally:
         engine.cleanup()
 
-    return list(results_by_rmm.values()), discovered
+    return list(results_by_rmm.values()), discovered, evidence_hash
 
 
 def _parse_single_file(
@@ -270,17 +284,19 @@ def _run_analysis(
     user_filter: str = "",
     trace_file: str = "",
     conn_file: str = "",
-) -> tuple[dict[str, ParseResult], ForensicSummary, list[DiscoveredFile]]:
+    target_os: TargetOS = TargetOS.AUTO,
+) -> tuple[dict[str, ParseResult], ForensicSummary, list[DiscoveredFile], str]:
     """
     Run the full analysis pipeline.
 
     If trace_file/conn_file are set, uses legacy AnyDesk-only mode.
     Otherwise, uses LogDiscoveryEngine + ParserRegistry for multi-RMM.
 
-    Returns (results_by_rmm, summary, discovered_files).
+    Returns (results_by_rmm, summary, discovered_files, evidence_hash).
     """
     results: dict[str, ParseResult] = {}
     discovered: list[DiscoveredFile] = []
+    evidence_hash: str = ""
 
     # ── Legacy mode (--trace / --conn) ────────────────────────────────────
     if trace_file or conn_file:
@@ -288,7 +304,7 @@ def _run_analysis(
         parser = ParserRegistry.get(RMMType.ANYDESK)
         if not parser:
             cprint("  [ERROR] Parser de AnyDesk no disponible", Fore.RED)
-            return results, ForensicSummary(), discovered
+            return results, ForensicSummary(), discovered, ""
 
         ad_result = ParseResult(rmm_type=RMMType.ANYDESK)
 
@@ -315,10 +331,11 @@ def _run_analysis(
     # ── Multi-RMM discovery mode ──────────────────────────────────────────
     elif input_path:
         cprint(f"  -> Descubriendo archivos RMM en: {input_path}", Fore.CYAN)
-        parse_results, discovered = _discover_and_parse(
+        parse_results, discovered, evidence_hash = _discover_and_parse(
             input_path,
             rmm_filter=rmm_filter,
             hostname_filter=hostname_filter,
+            target_os=target_os,
         )
 
         for idx, pr in enumerate(parse_results):
@@ -361,7 +378,7 @@ def _run_analysis(
     # ── Correlation ───────────────────────────────────────────────────────
     summary = correlate(results, incident=incident)
 
-    return results, summary, discovered
+    return results, summary, discovered, evidence_hash
 
 
 def _collect_all_public_ips(results: dict[str, ParseResult]) -> set[str]:
@@ -408,11 +425,14 @@ def _generate_outputs(
     do_html: bool = True,
     do_xlsx: bool = True,
     do_csv: bool = True,
+    evidence_hash: str = "",
 ) -> None:
     """Generate report files. Handles missing report modules gracefully."""
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    meta = {"files": source_files or []}
+    meta: dict = {"files": source_files or []}
+    if evidence_hash:
+        meta["evidence_sha256"] = evidence_hash
 
     # ── HTML ──────────────────────────────────────────────────────────
     if do_html:
@@ -707,6 +727,8 @@ def menu() -> None:
     analyzed     = False
     hostname_filter: str = ""
     user_filter:     str = ""
+    target_os:   TargetOS = TargetOS.AUTO
+    evidence_hash: str = ""
 
     if HAS_RICH:
         console = Console()
@@ -778,14 +800,20 @@ def menu() -> None:
             if incident.has_country:
                 incident_label += f" | Pais: {incident.origin_country}"
 
+        os_label = target_os.value.capitalize() if target_os != TargetOS.AUTO else "Auto"
+        hash_label = evidence_hash[:16] + "..." if evidence_hash else "--"
+
         if HAS_RICH:
             st = Table(show_header=False, box=None, padding=(0, 1))
             st.add_column("label", style="dim", width=18)
             st.add_column("value")
             st.add_row("Entrada:", input_path or "[dim]No configurada[/dim]")
+            st.add_row("SO Objetivo:", os_label)
             st.add_row("RMM Filter:", rmm_label)
             st.add_row("Archivos:", disc_label)
             st.add_row("Analizado:", analyzed_label)
+            if evidence_hash:
+                st.add_row("SHA-256:", f"[dim]{evidence_hash}[/dim]")
             st.add_row("Incidente:", incident_label)
             st.add_row("Hostname:", hostname_filter or "[dim]--[/dim]")
             st.add_row("Usuario:", user_filter or "[dim]--[/dim]")
@@ -811,9 +839,12 @@ def menu() -> None:
             console.print(Panel(st, title="Estado", border_style="dim"))
         else:
             print(_status_line("Entrada",     input_path or "No configurada", bool(input_path)))
+            print(_status_line("SO Objetivo", os_label))
             print(_status_line("RMM Filter",  rmm_label))
             print(_status_line("Archivos",    disc_label,                     bool(discovered)))
             print(_status_line("Analizado",   analyzed_label,                 analyzed))
+            if evidence_hash:
+                print(_status_line("SHA-256",  hash_label,                    True))
             print(_status_line("Incidente",   incident_label))
             print(_status_line("Hostname",    hostname_filter or "--"))
             print(_status_line("Usuario",     user_filter or "--"))
@@ -908,6 +939,22 @@ def menu() -> None:
                 user_filter = ""
                 incident.user_filter = ""
 
+            # Target OS
+            print()
+            cprint("  SO del equipo analizado:")
+            cprint("    [0] Auto-detectar (por defecto)")
+            cprint("    [1] Windows")
+            cprint("    [2] Linux")
+            cprint("    [3] macOS")
+            os_choice = input(
+                f"  SO [{target_os.value}]: "
+            ).strip()
+            _os_map = {"0": TargetOS.AUTO, "1": TargetOS.WINDOWS,
+                        "2": TargetOS.LINUX, "3": TargetOS.MACOS}
+            if os_choice in _os_map:
+                target_os = _os_map[os_choice]
+                cprint(f"  [v] SO: {target_os.value.capitalize()}", Fore.GREEN)
+
         # ── 3: Configure API keys ─────────────────────────────────────────
         elif choice == "3":
             print()
@@ -967,12 +1014,13 @@ def menu() -> None:
             analyzed = False
             ip_results = []
 
-            results, summary, discovered = _run_analysis(
+            results, summary, discovered, evidence_hash = _run_analysis(
                 input_path=input_path,
                 rmm_filter=rmm_filter or None,
                 incident=incident if incident.has_incident_date else None,
                 hostname_filter=hostname_filter,
                 user_filter=user_filter,
+                target_os=target_os,
             )
 
             if results:
@@ -1080,6 +1128,7 @@ def menu() -> None:
                 incident_ctx=incident_ctx,
                 source_files=source_files,
                 do_html=do_h, do_xlsx=do_x, do_csv=do_c,
+                evidence_hash=evidence_hash,
             )
             cprint(f"\n  [v] Informes en: {output_dir}/", Fore.GREEN)
 
@@ -1187,7 +1236,7 @@ def cli_mode(args: argparse.Namespace) -> None:
 
     # ── Run analysis ──────────────────────────────────────────────────────
     input_path = args.input or ""
-    results, summary, discovered = _run_analysis(
+    results, summary, discovered, _ev_hash = _run_analysis(
         input_path=input_path,
         rmm_filter=rmm_filter,
         incident=incident,
@@ -1258,6 +1307,7 @@ def cli_mode(args: argparse.Namespace) -> None:
         do_html=not args.no_html,
         do_xlsx=not args.no_xlsx,
         do_csv=not args.no_csv,
+        evidence_hash=_ev_hash,
     )
 
     cprint(f"\n  [v] Completado -> {output_dir}/\n", Fore.GREEN, True)
